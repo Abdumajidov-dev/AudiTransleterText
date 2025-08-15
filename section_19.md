@@ -1,0 +1,11 @@
+✅ Amalga Oshirilgan
+- ✅ Telefon raqam orqali SMS autentifikatsiya
+- ✅ Role-based access control (Admin/User)
+- ✅ Audio fayl yuklash va saqlash
+- ✅ OpenAI Whisper bilan speech-to-text
+- ✅ CRUD operations audio yozuvlar uchun
+- ✅ Responsive React frontend
+- ✅ Professional API dokumentatsiya
+- ✅ Docker containerization
+- ✅ Ma'lumotlar bazasi migration
+- ✅ File validation va error handling
