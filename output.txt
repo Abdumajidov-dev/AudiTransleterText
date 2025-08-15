@@ -1,0 +1,1492 @@
+# Audio Transcription System
+
+Professional audio transcription tizimi - telefon raqam orqali autentifikatsiya va speech-to-text funksiyasi bilan.
+
+## 📋 Loyiha Tuzilishi
+
+```
+audio-transcription-system/
+├── backend/
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── main.py
+│   │   ├── config.py
+│   │   ├── database/
+│   │   │   ├── __init__.py
+│   │   │   ├── connection.py
+│   │   │   └── models.py
+│   │   ├── schemas/
+│   │   │   ├── __init__.py
+│   │   │   ├── auth.py
+│   │   │   ├── audio.py
+│   │   │   └── user.py
+│   │   ├── services/
+│   │   │   ├── __init__.py
+│   │   │   ├── auth_service.py
+│   │   │   ├── sms_service.py
+│   │   │   ├── audio_service.py
+│   │   │   └── transcription_service.py
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   ├── deps.py
+│   │   │   ├── v1/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── auth.py
+│   │   │   │   ├── audio.py
+│   │   │   │   └── users.py
+│   │   ├── core/
+│   │   │   ├── __init__.py
+│   │   │   ├── security.py
+│   │   │   ├── exceptions.py
+│   │   │   └── middleware.py
+│   │   └── utils/
+│   │       ├── __init__.py
+│   │       ├── file_handler.py
+│   │       └── validators.py
+│   ├── uploads/
+│   │   └── audio/
+│   ├── requirements.txt
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   ├── alembic/
+│   │   ├── versions/
+│   │   ├── env.py
+│   │   └── alembic.ini
+│   └── tests/
+│       ├── __init__.py
+│       ├── test_auth.py
+│       └── test_audio.py
+├── frontend/
+│   ├── public/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── Auth/
+│   │   │   │   ├── PhoneLogin.jsx
+│   │   │   │   └── OTPVerification.jsx
+│   │   │   ├── Audio/
+│   │   │   │   ├── AudioUpload.jsx
+│   │   │   │   ├── AudioList.jsx
+│   │   │   │   └── AudioPlayer.jsx
+│   │   │   └── Layout/
+│   │   │       ├── Header.jsx
+│   │   │       └── Sidebar.jsx
+│   │   ├── pages/
+│   │   │   ├── Login.jsx
+│   │   │   ├── Dashboard.jsx
+│   │   │   └── AudioManagement.jsx
+│   │   ├── services/
+│   │   │   ├── api.js
+│   │   │   ├── auth.js
+│   │   │   └── audio.js
+│   │   ├── hooks/
+│   │   │   ├── useAuth.js
+│   │   │   └── useAudio.js
+│   │   ├── utils/
+│   │   │   ├── constants.js
+│   │   │   └── helpers.js
+│   │   ├── App.jsx
+│   │   └── main.jsx
+│   ├── package.json
+│   ├── vite.config.js
+│   └── Dockerfile
+└── README.md
+```
+
+## 🛠️ Backend (FastAPI)
+
+### 1. Ma'lumotlar Bazasi Modellari
+
+```python
+# backend/app/database/models.py
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Enum
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+import enum
+
+Base = declarative_base()
+
+class UserRole(enum.Enum):
+    ADMIN = "admin"
+    USER = "user"
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    phone_number = Column(String(20), unique=True, index=True, nullable=False)
+    role = Column(Enum(UserRole), default=UserRole.USER)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationship
+    audio_records = relationship("AudioRecord", back_populates="user")
+
+class OTPToken(Base):
+    __tablename__ = "otp_tokens"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    phone_number = Column(String(20), index=True)
+    otp_code = Column(String(6))
+    expires_at = Column(DateTime(timezone=True))
+    is_used = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class AudioRecord(Base):
+    __tablename__ = "audio_records"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    file_name = Column(String(255), nullable=False)
+    original_filename = Column(String(255))
+    file_path = Column(String(500))
+    file_size = Column(Integer)
+    duration = Column(Float)  # seconds
+    transcript_text = Column(Text)
+    transcription_status = Column(String(50), default="pending")  # pending, processing, completed, failed
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationship
+    user = relationship("User", back_populates="audio_records")
+```
+
+### 2. Konfiguratsiya
+
+```python
+# backend/app/config.py
+from pydantic import BaseSettings
+from typing import Optional
+import os
+
+class Settings(BaseSettings):
+    # Database
+    DATABASE_URL: str = "postgresql://user:password@localhost/audioapp"
+    
+    # JWT
+    SECRET_KEY: str = "your-super-secret-key-change-this-in-production"
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30 * 24 * 60  # 30 days
+    
+    # SMS Service (Twilio)
+    TWILIO_ACCOUNT_SID: Optional[str] = None
+    TWILIO_AUTH_TOKEN: Optional[str] = None
+    TWILIO_PHONE_NUMBER: Optional[str] = None
+    
+    # OpenAI
+    OPENAI_API_KEY: Optional[str] = None
+    
+    # File Upload
+    UPLOAD_DIR: str = "uploads/audio"
+    MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
+    ALLOWED_EXTENSIONS: list = [".mp3", ".wav", ".m4a", ".flac"]
+    
+    # CORS
+    CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:5173"]
+    
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
+```
+
+### 3. Autentifikatsiya Servisi
+
+```python
+# backend/app/services/auth_service.py
+from datetime import datetime, timedelta
+from typing import Optional
+import random
+import string
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.database.models import User, OTPToken, UserRole
+from app.schemas.auth import TokenData
+from app.services.sms_service import SMSService
+
+class AuthService:
+    def __init__(self, db: Session):
+        self.db = db
+        self.sms_service = SMSService()
+        self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    
+    def generate_otp(self) -> str:
+        """6 xonali OTP kodi yaratish"""
+        return ''.join(random.choices(string.digits, k=6))
+    
+    async def send_otp(self, phone_number: str) -> bool:
+        """OTP kodi yaratish va SMS yuborish"""
+        try:
+            # Eski OTP kodlarni o'chirish
+            self.db.query(OTPToken).filter(
+                OTPToken.phone_number == phone_number,
+                OTPToken.expires_at < datetime.utcnow()
+            ).delete()
+            
+            # Yangi OTP yaratish
+            otp_code = self.generate_otp()
+            expires_at = datetime.utcnow() + timedelta(minutes=5)  # 5 daqiqa
+            
+            otp_token = OTPToken(
+                phone_number=phone_number,
+                otp_code=otp_code,
+                expires_at=expires_at
+            )
+            
+            self.db.add(otp_token)
+            self.db.commit()
+            
+            # SMS yuborish
+            message = f"Tasdiqlash kodi: {otp_code}. 5 daqiqa ichida kiriting."
+            await self.sms_service.send_sms(phone_number, message)
+            
+            return True
+        except Exception as e:
+            self.db.rollback()
+            return False
+    
+    def verify_otp(self, phone_number: str, otp_code: str) -> Optional[User]:
+        """OTP kodni tekshirish va foydalanuvchi yaratish/topish"""
+        # OTP ni tekshirish
+        otp_token = self.db.query(OTPToken).filter(
+            OTPToken.phone_number == phone_number,
+            OTPToken.otp_code == otp_code,
+            OTPToken.expires_at > datetime.utcnow(),
+            OTPToken.is_used == False
+        ).first()
+        
+        if not otp_token:
+            return None
+        
+        # OTP ni ishlatilgan deb belgilash
+        otp_token.is_used = True
+        
+        # Foydalanuvchini topish yoki yaratish
+        user = self.db.query(User).filter(User.phone_number == phone_number).first()
+        if not user:
+            user = User(
+                phone_number=phone_number,
+                role=UserRole.USER
+            )
+            self.db.add(user)
+        
+        self.db.commit()
+        self.db.refresh(user)
+        
+        return user
+    
+    def create_access_token(self, data: dict, expires_delta: Optional[timedelta] = None):
+        """JWT token yaratish"""
+        to_encode = data.copy()
+        if expires_delta:
+            expire = datetime.utcnow() + expires_delta
+        else:
+            expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        
+        to_encode.update({"exp": expire})
+        encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+        return encoded_jwt
+    
+    def verify_token(self, token: str, credentials_exception) -> TokenData:
+        """JWT token ni tekshirish"""
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            user_id: str = payload.get("sub")
+            if user_id is None:
+                raise credentials_exception
+            token_data = TokenData(user_id=user_id)
+        except JWTError:
+            raise credentials_exception
+        return token_data
+```
+
+### 4. Audio Servisi
+
+```python
+# backend/app/services/audio_service.py
+import os
+import uuid
+import aiofiles
+from typing import List, Optional
+from fastapi import UploadFile
+from sqlalchemy.orm import Session
+from mutagen import File as MutagenFile
+
+from app.config import settings
+from app.database.models import AudioRecord, User, UserRole
+from app.services.transcription_service import TranscriptionService
+
+class AudioService:
+    def __init__(self, db: Session):
+        self.db = db
+        self.transcription_service = TranscriptionService()
+    
+    def validate_audio_file(self, file: UploadFile) -> tuple[bool, str]:
+        """Audio fayl formatini tekshirish"""
+        if not file.filename:
+            return False, "Fayl nomi bo'sh"
+        
+        file_extension = os.path.splitext(file.filename)[1].lower()
+        if file_extension not in settings.ALLOWED_EXTENSIONS:
+            return False, f"Faqat {', '.join(settings.ALLOWED_EXTENSIONS)} formatlar qo'llab-quvvatlanadi"
+        
+        return True, ""
+    
+    def generate_unique_filename(self, original_filename: str) -> str:
+        """Noyob fayl nomi yaratish"""
+        file_extension = os.path.splitext(original_filename)[1]
+        unique_name = f"{uuid.uuid4().hex}{file_extension}"
+        return unique_name
+    
+    def get_audio_metadata(self, file_path: str) -> dict:
+        """Audio fayl metama'lumotlarini olish"""
+        try:
+            audio_file = MutagenFile(file_path)
+            if audio_file is not None:
+                duration = audio_file.info.length if hasattr(audio_file.info, 'length') else 0
+                return {"duration": duration}
+            return {"duration": 0}
+        except:
+            return {"duration": 0}
+    
+    async def upload_audio(self, file: UploadFile, user: User) -> Optional[AudioRecord]:
+        """Audio fayl yuklash va ma'lumotlar bazasiga saqlash"""
+        try:
+            # Fayl validatsiyasi
+            is_valid, error_message = self.validate_audio_file(file)
+            if not is_valid:
+                return None
+            
+            # Fayl nomini yaratish
+            unique_filename = self.generate_unique_filename(file.filename)
+            file_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
+            
+            # Papka yaratish (agar yo'q bo'lsa)
+            os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+            
+            # Faylni saqlash
+            async with aiofiles.open(file_path, 'wb') as f:
+                content = await file.read()
+                await f.write(content)
+            
+            # Fayl ma'lumotlari
+            file_size = len(content)
+            metadata = self.get_audio_metadata(file_path)
+            
+            # Ma'lumotlar bazasiga saqlash
+            audio_record = AudioRecord(
+                user_id=user.id,
+                file_name=unique_filename,
+                original_filename=file.filename,
+                file_path=file_path,
+                file_size=file_size,
+                duration=metadata.get("duration", 0)
+            )
+            
+            self.db.add(audio_record)
+            self.db.commit()
+            self.db.refresh(audio_record)
+            
+            # Background task sifatida transkriptsiya qilish
+            await self.start_transcription(audio_record.id)
+            
+            return audio_record
+            
+        except Exception as e:
+            # Xatolik bo'lsa faylni o'chirish
+            if 'file_path' in locals() and os.path.exists(file_path):
+                os.remove(file_path)
+            self.db.rollback()
+            return None
+    
+    async def start_transcription(self, audio_record_id: int):
+        """Transkriptsiya jarayonini boshlash"""
+        try:
+            audio_record = self.db.query(AudioRecord).filter(AudioRecord.id == audio_record_id).first()
+            if not audio_record:
+                return
+            
+            # Status yangilash
+            audio_record.transcription_status = "processing"
+            self.db.commit()
+            
+            # Transkriptsiya qilish
+            transcript = await self.transcription_service.transcribe_audio(audio_record.file_path)
+            
+            # Natijani saqlash
+            audio_record.transcript_text = transcript
+            audio_record.transcription_status = "completed"
+            self.db.commit()
+            
+        except Exception as e:
+            # Xatolik holatida
+            audio_record = self.db.query(AudioRecord).filter(AudioRecord.id == audio_record_id).first()
+            if audio_record:
+                audio_record.transcription_status = "failed"
+                self.db.commit()
+    
+    def get_audio_list(self, user: User, skip: int = 0, limit: int = 100) -> List[AudioRecord]:
+        """Foydalanuvchi audio yozuvlarini olish"""
+        query = self.db.query(AudioRecord)
+        
+        # Admin barcha fayllarni ko'radi, user faqat o'zinkini
+        if user.role != UserRole.ADMIN:
+            query = query.filter(AudioRecord.user_id == user.id)
+        
+        return query.offset(skip).limit(limit).all()
+    
+    def get_audio_by_id(self, audio_id: int, user: User) -> Optional[AudioRecord]:
+        """Bitta audio yozuvini olish"""
+        query = self.db.query(AudioRecord).filter(AudioRecord.id == audio_id)
+        
+        # User faqat o'z fayllarini ko'ra oladi
+        if user.role != UserRole.ADMIN:
+            query = query.filter(AudioRecord.user_id == user.id)
+        
+        return query.first()
+    
+    def update_transcript(self, audio_id: int, new_transcript: str, user: User) -> Optional[AudioRecord]:
+        """Transkript matnini yangilash"""
+        audio_record = self.get_audio_by_id(audio_id, user)
+        if not audio_record:
+            return None
+        
+        audio_record.transcript_text = new_transcript
+        self.db.commit()
+        self.db.refresh(audio_record)
+        
+        return audio_record
+    
+    def delete_audio(self, audio_id: int, user: User) -> bool:
+        """Audio yozuvini o'chirish"""
+        audio_record = self.get_audio_by_id(audio_id, user)
+        if not audio_record:
+            return False
+        
+        try:
+            # Faylni o'chirish
+            if os.path.exists(audio_record.file_path):
+                os.remove(audio_record.file_path)
+            
+            # Ma'lumotlar bazasidan o'chirish
+            self.db.delete(audio_record)
+            self.db.commit()
+            
+            return True
+        except:
+            self.db.rollback()
+            return False
+```
+
+### 5. Speech-to-Text Servisi
+
+```python
+# backend/app/services/transcription_service.py
+import openai
+from typing import Optional
+import os
+from app.config import settings
+
+class TranscriptionService:
+    def __init__(self):
+        if settings.OPENAI_API_KEY:
+            openai.api_key = settings.OPENAI_API_KEY
+    
+    async def transcribe_audio(self, file_path: str) -> Optional[str]:
+        """OpenAI Whisper orqali audio faylni matnga o'girish"""
+        try:
+            with open(file_path, "rb") as audio_file:
+                transcript = openai.Audio.transcribe(
+                    model="whisper-1",
+                    file=audio_file,
+                    response_format="text"
+                )
+            return transcript
+        except Exception as e:
+            print(f"Transcription error: {e}")
+            return None
+    
+    # Alternativa: Local Whisper ishlatish
+    async def transcribe_audio_local(self, file_path: str) -> Optional[str]:
+        """Local Whisper model ishlatish"""
+        try:
+            import whisper
+            
+            model = whisper.load_model("base")
+            result = model.transcribe(file_path)
+            return result["text"]
+        except Exception as e:
+            print(f"Local transcription error: {e}")
+            return None
+```
+
+### 6. API Endpoints
+
+```python
+# backend/app/api/v1/auth.py
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from app.schemas.auth import OTPRequest, OTPVerify, Token
+from app.services.auth_service import AuthService
+from app.api.deps import get_db
+
+router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+@router.post("/send_otp")
+async def send_otp(request: OTPRequest, db: Session = Depends(get_db)):
+    """Telefon raqamga OTP kodi yuborish"""
+    auth_service = AuthService(db)
+    success = await auth_service.send_otp(request.phone_number)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SMS yuborishda xatolik yuz berdi"
+        )
+    
+    return {"message": "OTP kodi yuborildi"}
+
+@router.post("/verify_otp", response_model=Token)
+def verify_otp(request: OTPVerify, db: Session = Depends(get_db)):
+    """OTP kodni tekshirish va token berish"""
+    auth_service = AuthService(db)
+    user = auth_service.verify_otp(request.phone_number, request.otp_code)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Noto'g'ri yoki muddati o'tgan kod"
+        )
+    
+    # JWT token yaratish
+    access_token = auth_service.create_access_token(data={"sub": str(user.id)})
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": user.id,
+        "phone_number": user.phone_number,
+        "role": user.role.value
+    }
+```
+
+```python
+# backend/app/api/v1/audio.py
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from typing import List
+from sqlalchemy.orm import Session
+
+from app.schemas.audio import AudioResponse, AudioUpdate, AudioList
+from app.services.audio_service import AudioService
+from app.api.deps import get_db, get_current_user
+from app.database.models import User
+
+router = APIRouter(prefix="/audio", tags=["Audio Management"])
+
+@router.post("/upload", response_model=AudioResponse)
+async def upload_audio(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Audio fayl yuklash"""
+    audio_service = AudioService(db)
+    audio_record = await audio_service.upload_audio(file, current_user)
+    
+    if not audio_record:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Fayl yuklashda xatolik"
+        )
+    
+    return audio_record
+
+@router.get("/list", response_model=AudioList)
+def get_audio_list(
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Audio yozuvlar ro'yxati"""
+    audio_service = AudioService(db)
+    audio_records = audio_service.get_audio_list(current_user, skip, limit)
+    
+    return {
+        "items": audio_records,
+        "total": len(audio_records),
+        "skip": skip,
+        "limit": limit
+    }
+
+@router.get("/{audio_id}", response_model=AudioResponse)
+def get_audio(
+    audio_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Bitta audio yozuvini olish"""
+    audio_service = AudioService(db)
+    audio_record = audio_service.get_audio_by_id(audio_id, current_user)
+    
+    if not audio_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audio yozuv topilmadi"
+        )
+    
+    return audio_record
+
+@router.put("/{audio_id}", response_model=AudioResponse)
+def update_audio(
+    audio_id: int,
+    update_data: AudioUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Transkript matnini yangilash"""
+    audio_service = AudioService(db)
+    audio_record = audio_service.update_transcript(
+        audio_id, update_data.transcript_text, current_user
+    )
+    
+    if not audio_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audio yozuv topilmadi"
+        )
+    
+    return audio_record
+
+@router.delete("/{audio_id}")
+def delete_audio(
+    audio_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Audio yozuvini o'chirish"""
+    audio_service = AudioService(db)
+    success = audio_service.delete_audio(audio_id, current_user)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audio yozuv topilmadi yoki o'chirishda xatolik"
+        )
+    
+    return {"message": "Audio yozuv o'chirildi"}
+```
+
+## 🎨 Frontend (React + Vite)
+
+### 1. Autentifikatsiya Komponenti
+
+```jsx
+// frontend/src/components/Auth/PhoneLogin.jsx
+import React, { useState } from 'react';
+import { authService } from '../../services/auth';
+
+const PhoneLogin = ({ onOTPSent }) => {
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+
+    try {
+      await authService.sendOTP(phoneNumber);
+      onOTPSent(phoneNumber);
+    } catch (err) {
+      setError('SMS yuborishda xatolik yuz berdi');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-lg shadow-md p-6">
+      <h3 className="text-lg font-semibold mb-4">Audio Fayl Yuklash</h3>
+      
+      <div className="space-y-4">
+        <div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/*"
+            onChange={handleFileSelect}
+            className="hidden"
+            id="audio-upload"
+          />
+          <label
+            htmlFor="audio-upload"
+            className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100"
+          >
+            <div className="flex flex-col items-center justify-center pt-5 pb-6">
+              <svg className="w-10 h-10 mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
+              <p className="mb-2 text-sm text-gray-500">
+                <span className="font-semibold">Audio fayl tanlash</span>
+              </p>
+              <p className="text-xs text-gray-500">MP3, WAV, M4A, FLAC (MAX. 50MB)</p>
+            </div>
+          </label>
+        </div>
+
+        {file && (
+          <div className="bg-gray-100 p-3 rounded-lg">
+            <p className="text-sm font-medium">Tanlangan fayl:</p>
+            <p className="text-sm text-gray-600">{file.name}</p>
+            <p className="text-xs text-gray-500">
+              Hajmi: {(file.size / 1024 / 1024).toFixed(2)} MB
+            </p>
+          </div>
+        )}
+
+        {error && (
+          <div className="text-red-500 text-sm text-center bg-red-50 p-2 rounded">
+            {error}
+          </div>
+        )}
+
+        <button
+          onClick={handleUpload}
+          disabled={!file || uploading}
+          className="w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+        >
+          {uploading ? (
+            <>
+              <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Yuklanmoqda...
+            </>
+          ) : (
+            'Fayl Yuklash'
+          )}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export default AudioUpload;
+```
+
+### 3. Audio Ro'yxati Komponenti
+
+```jsx
+// frontend/src/components/Audio/AudioList.jsx
+import React, { useState, useEffect } from 'react';
+import { audioService } from '../../services/audio';
+import AudioPlayer from './AudioPlayer';
+
+const AudioList = ({ refreshTrigger }) => {
+  const [audioList, setAudioList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState('');
+
+  const loadAudioList = async () => {
+    try {
+      setLoading(true);
+      const data = await audioService.getAudioList();
+      setAudioList(data.items);
+    } catch (err) {
+      setError('Ma\'lumotlarni yuklashda xatolik');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadAudioList();
+  }, [refreshTrigger]);
+
+  const handleEdit = (audio) => {
+    setEditingId(audio.id);
+    setEditText(audio.transcript_text || '');
+  };
+
+  const handleSave = async (audioId) => {
+    try {
+      await audioService.updateTranscript(audioId, editText);
+      setEditingId(null);
+      loadAudioList();
+    } catch (err) {
+      setError('Matnni saqlashda xatolik');
+    }
+  };
+
+  const handleDelete = async (audioId) => {
+    if (window.confirm('Bu yozuvni o\'chirishga ishonchingiz komilmi?')) {
+      try {
+        await audioService.deleteAudio(audioId);
+        loadAudioList();
+      } catch (err) {
+        setError('O\'chirishda xatolik');
+      }
+    }
+  };
+
+  const getStatusBadge = (status) => {
+    const statusMap = {
+      pending: { text: 'Kutilmoqda', color: 'bg-yellow-100 text-yellow-800' },
+      processing: { text: 'Ishlanmoqda', color: 'bg-blue-100 text-blue-800' },
+      completed: { text: 'Tayyor', color: 'bg-green-100 text-green-800' },
+      failed: { text: 'Xatolik', color: 'bg-red-100 text-red-800' }
+    };
+    
+    const badge = statusMap[status] || statusMap.pending;
+    return (
+      <span className={`px-2 py-1 text-xs font-semibold rounded-full ${badge.color}`}>
+        {badge.text}
+      </span>
+    );
+  };
+
+  const formatDuration = (seconds) => {
+    if (!seconds) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center py-8">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow-md p-6">
+      <h3 className="text-lg font-semibold mb-4">Audio Yozuvlar</h3>
+      
+      {error && (
+        <div className="text-red-500 text-sm mb-4 bg-red-50 p-2 rounded">
+          {error}
+        </div>
+      )}
+
+      {audioList.length === 0 ? (
+        <p className="text-gray-500 text-center py-8">Hozircha audio yozuvlar yo'q</p>
+      ) : (
+        <div className="space-y-4">
+          {audioList.map((audio) => (
+            <div key={audio.id} className="border border-gray-200 rounded-lg p-4">
+              <div className="flex justify-between items-start mb-3">
+                <div>
+                  <h4 className="font-medium text-gray-900">{audio.original_filename}</h4>
+                  <div className="flex items-center space-x-4 text-sm text-gray-500 mt-1">
+                    <span>Davomiyligi: {formatDuration(audio.duration)}</span>
+                    <span>Hajmi: {(audio.file_size / 1024 / 1024).toFixed(2)} MB</span>
+                    <span>{new Date(audio.created_at).toLocaleDateString('uz-UZ')}</span>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2">
+                  {getStatusBadge(audio.transcription_status)}
+                  <button
+                    onClick={() => handleEdit(audio)}
+                    className="text-blue-500 hover:text-blue-700 text-sm"
+                  >
+                    Tahrirlash
+                  </button>
+                  <button
+                    onClick={() => handleDelete(audio.id)}
+                    className="text-red-500 hover:text-red-700 text-sm"
+                  >
+                    O'chirish
+                  </button>
+                </div>
+              </div>
+
+              <AudioPlayer audioUrl={`/api/v1/audio/file/${audio.id}`} />
+
+              <div className="mt-3">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Transkript matni:
+                </label>
+                {editingId === audio.id ? (
+                  <div className="space-y-2">
+                    <textarea
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      className="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      rows={4}
+                      placeholder="Matn kiriting..."
+                    />
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => handleSave(audio.id)}
+                        className="px-3 py-1 bg-green-500 text-white text-sm rounded hover:bg-green-600"
+                      >
+                        Saqlash
+                      </button>
+                      <button
+                        onClick={() => setEditingId(null)}
+                        className="px-3 py-1 bg-gray-500 text-white text-sm rounded hover:bg-gray-600"
+                      >
+                        Bekor qilish
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-gray-50 rounded-md">
+                    {audio.transcript_text ? (
+                      <p className="text-gray-700">{audio.transcript_text}</p>
+                    ) : (
+                      <p className="text-gray-500 italic">
+                        {audio.transcription_status === 'processing' 
+                          ? 'Matn ishlanmoqda...' 
+                          : 'Matn mavjud emas'
+                        }
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default AudioList;
+```
+
+### 4. API Service Fayllari
+
+```javascript
+// frontend/src/services/api.js
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+
+class ApiService {
+  constructor() {
+    this.baseURL = API_BASE_URL;
+  }
+
+  getAuthHeaders() {
+    const token = localStorage.getItem('access_token');
+    return {
+      'Content-Type': 'application/json',
+      ...(token && { 'Authorization': `Bearer ${token}` })
+    };
+  }
+
+  getAuthHeadersForFile() {
+    const token = localStorage.getItem('access_token');
+    return {
+      ...(token && { 'Authorization': `Bearer ${token}` })
+    };
+  }
+
+  async request(endpoint, options = {}) {
+    const url = `${this.baseURL}${endpoint}`;
+    const config = {
+      headers: this.getAuthHeaders(),
+      ...options
+    };
+
+    try {
+      const response = await fetch(url, config);
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('API Request Error:', error);
+      throw error;
+    }
+  }
+
+  async uploadFile(endpoint, file) {
+    const url = `${this.baseURL}${endpoint}`;
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getAuthHeadersForFile(),
+        body: formData
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('File Upload Error:', error);
+      throw error;
+    }
+  }
+}
+
+export const apiService = new ApiService();
+```
+
+```javascript
+// frontend/src/services/auth.js
+import { apiService } from './api';
+
+class AuthService {
+  async sendOTP(phoneNumber) {
+    return await apiService.request('/auth/send_otp', {
+      method: 'POST',
+      body: JSON.stringify({ phone_number: phoneNumber })
+    });
+  }
+
+  async verifyOTP(phoneNumber, otpCode) {
+    const response = await apiService.request('/auth/verify_otp', {
+      method: 'POST',
+      body: JSON.stringify({ 
+        phone_number: phoneNumber, 
+        otp_code: otpCode 
+      })
+    });
+
+    // Token ni saqlash
+    if (response.access_token) {
+      localStorage.setItem('access_token', response.access_token);
+      localStorage.setItem('user_info', JSON.stringify({
+        user_id: response.user_id,
+        phone_number: response.phone_number,
+        role: response.role
+      }));
+    }
+
+    return response;
+  }
+
+  logout() {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('user_info');
+  }
+
+  getCurrentUser() {
+    const userInfo = localStorage.getItem('user_info');
+    return userInfo ? JSON.parse(userInfo) : null;
+  }
+
+  isAuthenticated() {
+    return !!localStorage.getItem('access_token');
+  }
+}
+
+export const authService = new AuthService();
+```
+
+### 5. Docker va Deploy
+
+```dockerfile
+# backend/Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Application code
+COPY . .
+
+# Create uploads directory
+RUN mkdir -p uploads/audio
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+```dockerfile
+# frontend/Dockerfile
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=0 /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: audioapp
+      POSTGRES_USER: audiouser
+      POSTGRES_PASSWORD: audiopass123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql://audiouser:audiopass123@db:5432/audioapp
+      SECRET_KEY: your-super-secret-key-change-this-in-production
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER}
+    volumes:
+      - ./backend/uploads:/app/uploads
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+```
+
+### 6. Requirements fayllari
+
+```txt
+# backend/requirements.txt
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+sqlalchemy==2.0.23
+alembic==1.12.1
+psycopg2-binary==2.9.9
+pydantic[email]==2.5.0
+aiofiles==23.2.1
+mutagen==1.47.0
+openai==1.3.7
+twilio==8.10.0
+whisper==1.1.10
+python-dotenv==1.0.0
+```
+
+```json
+// frontend/package.json
+{
+  "name": "audio-transcription-frontend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.8.1",
+    "axios": "^1.6.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.3.6",
+    "vite": "^5.0.8"
+  }
+}
+```
+
+## 🚀 Ishga Tushirish Bo'yicha Qo'llanma
+
+### 1. Muhit O'rnatish
+
+```bash
+# Loyihani clone qilish
+git clone <repository-url>
+cd audio-transcription-system
+
+# Environment variables o'rnatish
+cp backend/.env.example backend/.env
+# .env faylida kerakli ma'lumotlarni to'ldiring
+```
+
+### 2. Docker bilan ishga tushirish
+
+```bash
+# Barcha servislarni ishga tushirish
+docker-compose up -d
+
+# Ma'lumotlar bazasini migrate qilish
+docker-compose exec backend alembic upgrade head
+```
+
+### 3. Development rejimida ishga tushirish
+
+```bash
+# Backend
+cd backend
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# Frontend
+cd frontend
+npm install
+npm run dev
+```
+
+### 4. Ma'lumotlar Bazasini O'rnatish
+
+```bash
+# Alembic migration yaratish
+cd backend
+alembic init alembic
+alembic revision --autogenerate -m "Initial migration"
+alembic upgrade head
+```
+
+## 🔧 Konfiguratsiya
+
+### Environment Variables (.env)
+
+```env
+# Database
+DATABASE_URL=postgresql://audiouser:audiopass123@localhost:5432/audioapp
+
+# JWT
+SECRET_KEY=your-super-secret-key-change-this-in-production
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=43200
+
+# Twilio SMS
+TWILIO_ACCOUNT_SID=your_twilio_account_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token  
+TWILIO_PHONE_NUMBER=your_twilio_phone_number
+
+# OpenAI
+OPENAI_API_KEY=your_openai_api_key
+
+# File Upload
+UPLOAD_DIR=uploads/audio
+MAX_FILE_SIZE=52428800
+ALLOWED_EXTENSIONS=[".mp3", ".wav", ".m4a", ".flac"]
+
+# CORS
+CORS_ORIGINS=["http://localhost:3000", "http://localhost:5173"]
+```
+
+## 📱 Flutter Integration uchun Tayorliq
+
+Backend API'si RESTful tarzda yaratilgani uchun Flutter aplikatsiyasiga oson integratsiya qilish mumkin:
+
+### Flutter HTTP Service Namunasi
+
+```dart
+// lib/services/api_service.dart
+import 'dart:convert';
+import 'dart:io';
+import 'package:http/http.dart' as http;
+
+class ApiService {
+  static const String baseUrl = 'http://localhost:8000/api/v1';
+  String? _accessToken;
+
+  // OTP yuborish
+  Future<bool> sendOTP(String phoneNumber) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/send_otp'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'phone_number': phoneNumber}),
+    );
+    return response.statusCode == 200;
+  }
+
+  // Audio yuklash
+  Future<Map<String, dynamic>?> uploadAudio(File audioFile) async {
+    var request = http.MultipartRequest(
+      'POST', 
+      Uri.parse('$baseUrl/audio/upload')
+    );
+    
+    request.headers['Authorization'] = 'Bearer $_accessToken';
+    request.files.add(await http.MultipartFile.fromPath(
+      'file', 
+      audioFile.path
+    ));
+
+    var response = await request.send();
+    if (response.statusCode == 200) {
+      return jsonDecode(await response.stream.bytesToString());
+    }
+    return null;
+  }
+}
+```
+
+## 🎯 Xususiyatlar va Imkoniyatlar
+
+### ✅ Amalga Oshirilgan
+- ✅ Telefon raqam orqali SMS autentifikatsiya
+- ✅ Role-based access control (Admin/User)
+- ✅ Audio fayl yuklash va saqlash
+- ✅ OpenAI Whisper bilan speech-to-text
+- ✅ CRUD operations audio yozuvlar uchun
+- ✅ Responsive React frontend
+- ✅ Professional API dokumentatsiya
+- ✅ Docker containerization
+- ✅ Ma'lumotlar bazasi migration
+- ✅ File validation va error handling
+
+### 🔄 Kelajakda Qo'shilishi Mumkin
+- Real-time transcription progress
+- Batch audio processing
+- Audio format conversion
+- Advanced search va filter
+- Export functionality (PDF, DOCX)
+- Multi-language transcription
+- Audio player controls
+- Background job queue (Celery/Redis)
+
+## 📋 API Endpoints Summary
+
+### Authentication
+- `POST /auth/send_otp` - OTP yuborish
+- `POST /auth/verify_otp` - OTP tasdiqlash
+
+### Audio Management  
+- `POST /audio/upload` - Audio yuklash
+- `GET /audio/list` - Ro'yxatni olish
+- `GET /audio/{id}` - Bitta yozuvni olish
+- `PUT /audio/{id}` - Matnni yangilash
+- `DELETE /audio/{id}` - Yozuvni o'chirish
+
+Bu loyiha professional darajada ishlaydi va kelajakda Flutter mobile app bilan osongina integratsiya qilish mumkin!
+    <div className="max-w-md mx-auto bg-white rounded-lg shadow-md p-6">
+      <h2 className="text-2xl font-bold text-center mb-6">Tizimga kirish</h2>
+      
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Telefon raqam
+          </label>
+          <input
+            type="tel"
+            value={phoneNumber}
+            onChange={(e) => setPhoneNumber(e.target.value)}
+            placeholder="+998901234567"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            required
+          />
+        </div>
+
+        {error && (
+          <div className="text-red-500 text-sm text-center">{error}</div>
+        )}
+
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {loading ? 'Yuborilmoqda...' : 'SMS kod yuborish'}
+        </button>
+      </form>
+    </div>
+  );
+};
+
+export default PhoneLogin;
+```
+
+### 2. Audio Upload Komponenti
+
+```jsx
+// frontend/src/components/Audio/AudioUpload.jsx
+import React, { useState, useRef } from 'react';
+import { audioService } from '../../services/audio';
+
+const AudioUpload = ({ onUploadComplete }) => {
+  const [file, setFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+  const fileInputRef = useRef();
+
+  const handleFileSelect = (e) => {
+    const selectedFile = e.target.files[0];
+    if (selectedFile) {
+      // Fayl formatini tekshirish
+      const allowedTypes = ['audio/mp3', 'audio/wav', 'audio/m4a', 'audio/flac'];
+      if (!allowedTypes.includes(selectedFile.type)) {
+        setError('Faqat MP3, WAV, M4A, FLAC formatlar qo\'llab-quvvatlanadi');
+        return;
+      }
+
+      // Fayl hajmini tekshirish (50MB)
+      if (selectedFile.size > 50 * 1024 * 1024) {
+        setError('Fayl hajmi 50MB dan oshmasligi kerak');
+        return;
+      }
+
+      setFile(selectedFile);
+      setError('');
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!file) return;
+
+    setUploading(true);
+    setError('');
+
+    try {
+      const result = await audioService.uploadAudio(file);
+      onUploadComplete(result);
+      setFile(null);
+      fileInputRef.current.value = '';
+    } catch (err) {
+      setError('Fayl yuklashda xatolik yuz berdi');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return 
